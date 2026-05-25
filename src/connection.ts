@@ -2,6 +2,7 @@ import * as net from 'node:net';
 import * as dgram from 'node:dgram';
 import { SOCKS5Handler } from './socks5/handler.js';
 import { UDPRelay, RelayRouter } from './relay/udp-relay.js';
+import { TCPRelay } from './relay/tcp-relay.js';
 import { PacketQueue } from './queue.js';
 
 /**
@@ -9,9 +10,11 @@ import { PacketQueue } from './queue.js';
  */
 export class ClientConnection {
   private socks5: SOCKS5Handler;
-  private relay: UDPRelay | null = null;
+  private tcpRelay: TCPRelay | null = null;
+  private udpRelay: UDPRelay | null = null;
   private clientUDPAddr: string | null = null;
   private clientUDPPort: number | null = null;
+  private mode: 'tcp' | 'udp' | null = null;
 
   constructor(
     private tcp: net.Socket,
@@ -48,7 +51,12 @@ export class ClientConnection {
           return;
         }
 
-        await this.setupUDPRelay();
+        // Route based on command type
+        if (cmdResp.type === 'tcp') {
+          await this.setupTCPRelay(cmdResp.destAddr!, cmdResp.destPort!);
+        } else if (cmdResp.type === 'udp') {
+          await this.setupUDPRelay();
+        }
         return;
       }
     } catch (err) {
@@ -61,16 +69,16 @@ export class ClientConnection {
    * Setup UDP relay socket and respond to client
    */
   private async setupUDPRelay(): Promise<void> {
-    this.relay = new UDPRelay();
+    this.udpRelay = new UDPRelay();
 
     try {
-      const relayPort = await this.relay.bind();
+      const relayPort = await this.udpRelay.bind();
       const localIP = (this.tcp.localAddress ?? '127.0.0.1').replace(
         '::ffff:',
         '',
       );
 
-      this.relay.onMessage((msg, rinfo) => {
+      this.udpRelay.onMessage((msg, rinfo) => {
         this.handleRelayMessage(msg, rinfo);
       });
 
@@ -85,10 +93,41 @@ export class ClientConnection {
   }
 
   /**
+   * Setup TCP relay and respond to client
+   */
+  private async setupTCPRelay(
+    destAddr: string,
+    destPort: number,
+  ): Promise<void> {
+    this.tcpRelay = new TCPRelay(this.tcp);
+    this.mode = 'tcp';
+
+    try {
+      await this.tcpRelay.connect(destAddr, destPort);
+
+      const localIP = (this.tcp.localAddress ?? '127.0.0.1').replace(
+        '::ffff:',
+        '',
+      );
+      const localPort = this.tcp.localPort ?? 0;
+
+      this.tcp.write(this.socks5.buildTCPSuccess(localIP, localPort));
+
+      const clientId = `${this.tcp.remoteAddress}:${this.tcp.remotePort}`;
+      console.log(
+        `[TCP] Tunnel established: ${clientId} → ${destAddr}:${destPort}`,
+      );
+    } catch (err) {
+      console.error(`[TCP] Connection failed: ${(err as Error).message}`);
+      this.tcp.destroy();
+    }
+  }
+
+  /**
    * Handle UDP message from relay — route inbound/outbound
    */
   private handleRelayMessage(msg: Buffer, rinfo: dgram.RemoteInfo): void {
-    if (!this.relay) return;
+    if (!this.udpRelay) return;
 
     // Lock client address on first message
     if (this.clientUDPAddr === null) {
@@ -113,7 +152,7 @@ export class ClientConnection {
         payload: routed.payload,
         destAddr,
         destPort,
-        relay: this.relay.getSocket(),
+        relay: this.udpRelay.getSocket(),
       });
     } else {
       if (!this.clientUDPAddr || !this.clientUDPPort) return;
@@ -125,7 +164,7 @@ export class ClientConnection {
         payload: routed.payload,
         clientAddr: this.clientUDPAddr,
         clientPort: this.clientUDPPort,
-        relay: this.relay.getSocket(),
+        relay: this.udpRelay.getSocket(),
       });
     }
   }
@@ -136,8 +175,10 @@ export class ClientConnection {
   public close(): void {
     const clientId = `${this.tcp.remoteAddress}:${this.tcp.remotePort}`;
     console.log(`[TCP] ↘ Client disconnected: ${clientId}`);
-    this.relay?.close();
-    this.relay = null;
+    this.tcpRelay?.close();
+    this.udpRelay?.close();
+    this.tcpRelay = null;
+    this.udpRelay = null;
   }
 
   /**
