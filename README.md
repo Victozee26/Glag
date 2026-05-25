@@ -97,8 +97,18 @@ Result: rubber-banding, delayed hit registration, sudden position jumps.
 **Port already in use**
 ```bash
 # Use a different port
-npx ts-node src/proxy.ts --port 1081 --hold 2000
+tsx src/index.ts --port 1081 --hold 2000
 ```
+
+---
+
+## Project Structure
+
+- `src/index.ts`: Application entry point.
+- `src/server.ts`: TCP server and SOCKS5 handshake handler.
+- `src/queue.ts`: Packet queue management and burst timer logic.
+- `src/config.ts`: Command-line argument parsing.
+- `src/socks5/`: Protocol-specific constants and UDP header utilities.
 
 **SocksDroid not connecting**
 - Make sure the proxy is running BEFORE toggling SocksDroid on
