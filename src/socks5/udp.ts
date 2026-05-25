@@ -25,7 +25,7 @@ export function parseUDPHeader(buf: Buffer): ParsedUDPHeader | null {
     }
     case ATYP_DOMAIN: {
       const len = buf[4];
-      if (len === undefined || buf.length < 5 + len + 2) return null;
+      if (!len || buf.length < 5 + len + 2) return null;
       destAddr = buf.slice(5, 5 + len).toString('utf8');
       offset = 5 + len;
       break;

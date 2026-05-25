@@ -23,7 +23,7 @@ export class ClientConnection {
   /**
    * Handle incoming TCP data and manage protocol handshake
    */
-  public handleData(buf: Buffer): void {
+  public async handleData(buf: Buffer): Promise<void> {
     try {
       const state = this.socks5.getState();
 
@@ -41,13 +41,14 @@ export class ClientConnection {
       if (state === 'cmd') {
         const cmdResp = this.socks5.handleCmd(buf);
         if (!cmdResp || !cmdResp.success) {
-          console.log(`[CMD] Unsupported command: 0x${buf[1]?.toString(16)}`);
+          const cmd = buf[1] ?? 0;
+          console.log(`[CMD] Unsupported command: 0x${cmd.toString(16)}`);
           this.tcp.write(this.socks5.buildCmdRejection());
           this.tcp.destroy();
           return;
         }
 
-        this.setupUDPRelay();
+        await this.setupUDPRelay();
         return;
       }
     } catch (err) {

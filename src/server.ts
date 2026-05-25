@@ -13,7 +13,9 @@ export class ProxyServer {
     private config: Config,
     private queue: PacketQueue,
   ) {
-    this.server = net.createServer((tcp) => this.handleNewClient(tcp));
+    this.server = net.createServer((tcp) => {
+      this.handleNewClient(tcp);
+    });
   }
 
   public listen(): void {
@@ -44,7 +46,7 @@ export class ProxyServer {
     const conn = new ClientConnection(tcp, this.queue);
 
     tcp.on('data', (buf: Buffer) => {
-      conn.handleData(buf);
+      void conn.handleData(buf);
     });
 
     tcp.on('close', () => {
