@@ -11,7 +11,7 @@ export function parseArgs(): Config {
   for (let i = 0; i < raw.length; i++) {
     const val = raw[i + 1];
     if (raw[i] === '--port') {
-      if (val === undefined) continue;
+      if (!val) continue;
       port = parseInt(val, 10);
       if (isNaN(port) || port < 1 || port > 65535) {
         console.error('[CONFIG] Invalid --port. Use 1–65535.');
@@ -19,7 +19,7 @@ export function parseArgs(): Config {
       }
     }
     if (raw[i] === '--hold') {
-      if (val === undefined) continue;
+      if (!val) continue;
       holdMs = parseInt(val, 10);
       if (isNaN(holdMs) || holdMs < 0) {
         console.error('[CONFIG] Invalid --hold. Use positive ms e.g. 2000');

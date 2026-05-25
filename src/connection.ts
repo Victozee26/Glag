@@ -104,11 +104,14 @@ export class ClientConnection {
       const routed = RelayRouter.routeOutbound(msg);
       if (!routed) return;
 
+      const { destAddr, destPort } = routed;
+      if (!destAddr || destPort === undefined) return;
+
       this.queue.push({
         dir: 'out',
         payload: routed.payload,
-        destAddr: routed.destAddr!,
-        destPort: routed.destPort!,
+        destAddr,
+        destPort,
         relay: this.relay.getSocket(),
       });
     } else {
