@@ -18,21 +18,32 @@ export class ProxyServer {
     });
   }
 
-  public listen(): void {
-    this.server.on('error', (err: NodeJS.ErrnoException) => {
-      if (err.code === 'EADDRINUSE') {
-        console.error(
-          `[SERVER] Port ${this.config.port} is already in use. Change with --port`,
-        );
-      } else {
-        console.error('[SERVER] Fatal:', err.message);
-      }
-      process.exit(1);
-    });
+  public listen(): Promise<void> {
+    return new Promise((resolve, reject) => {
+      this.server.on('error', (err: NodeJS.ErrnoException) => {
+        if (err.code === 'EADDRINUSE') {
+          console.error(
+            `[SERVER] Port ${this.config.port} is already in use. Change with --port`,
+          );
+        } else {
+          console.error('[SERVER] Fatal:', err.message);
+        }
+        reject(err);
+      });
 
-    this.server.listen(this.config.port, '127.0.0.1', () => {
-      console.log(`[PROXY] ✅ Listening on 127.0.0.1:${this.config.port}`);
-      console.log('[PROXY] Waiting for SocksDroid...\n');
+      this.server.listen(this.config.port, '127.0.0.1', () => {
+        console.log(`[PROXY] ✅ Listening on 127.0.0.1:${this.config.port}`);
+        console.log('[PROXY] Waiting for SocksDroid...\n');
+        resolve();
+      });
+    });
+  }
+
+  public stop(): Promise<void> {
+    return new Promise((resolve) => {
+      this.server.close(() => {
+        resolve();
+      });
     });
   }
 

@@ -23,6 +23,8 @@ export class PacketQueue {
   private totalBursts = 0;
   private totalPackets = 0;
 
+  private timer: NodeJS.Timeout | null = null;
+
   constructor(private holdMs: number) {}
 
   public push(pkt: QueuedPkt): void {
@@ -30,7 +32,8 @@ export class PacketQueue {
   }
 
   public startBurstTimer(): void {
-    setInterval(() => {
+    if (this.timer) return;
+    this.timer = setInterval(() => {
       if (this.queue.length === 0) return;
 
       const batch = this.queue.splice(0, this.queue.length);
@@ -57,5 +60,13 @@ export class PacketQueue {
         }
       }
     }, this.holdMs);
+  }
+
+  public stop(): void {
+    if (this.timer) {
+      clearInterval(this.timer);
+      this.timer = null;
+    }
+    this.queue = [];
   }
 }

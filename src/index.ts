@@ -21,4 +21,7 @@ const queue = new PacketQueue(config.holdMs);
 queue.startBurstTimer();
 
 const server = new ProxyServer(config, queue);
-server.listen();
+server.listen().catch((err) => {
+  console.error('[FATAL] Failed to start server:', err.message);
+  process.exit(1);
+});
