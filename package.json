@@ -2,16 +2,16 @@
   "name": "udp-burst-proxy",
   "version": "1.0.0",
   "description": "SOCKS5 UDP burst proxy for Free Fire — SocksDroid compatible",
-  "main": "dist/proxy.js",
+  "type": "module",
+  "main": "dist/index.js",
   "scripts": {
-    "start": "ts-node src/proxy.ts",
+    "start": "tsx src/index.ts",
     "build": "tsc",
-    "run:example": "ts-node src/proxy.ts --port 1080 --hold 2000"
+    "run:example": "tsx src/index.ts --port 1080 --hold 2000"
   },
-  "dependencies": {},
   "devDependencies": {
-    "@types/node": "^20.0.0",
-    "ts-node": "^10.9.2",
-    "typescript": "^5.4.0"
+    "@types/node": "^20.19.41",
+    "tsx": "^4.22.3",
+    "typescript": "^6.0.3"
   }
 }
