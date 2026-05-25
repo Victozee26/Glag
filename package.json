@@ -3,11 +3,11 @@
   "version": "1.0.0",
   "description": "SOCKS5 UDP burst proxy for Free Fire — SocksDroid compatible",
   "type": "module",
-  "main": "dist/proxy.js",
+  "main": "dist/index.js",
   "scripts": {
-    "start": "tsx src/proxy.ts",
+    "start": "tsx src/index.ts",
     "build": "tsc",
-    "run:example": "tsx src/proxy.ts --port 1080 --hold 2000"
+    "run:example": "tsx src/index.ts --port 1080 --hold 2000"
   },
   "devDependencies": {
     "@types/node": "^20.19.41",
