@@ -1,5 +1,6 @@
 export const SOCKS5_VERSION   = 0x05;
 export const AUTH_NONE        = 0x00;
+export const CMD_CONNECT      = 0x01;
 export const CMD_UDP_ASSOC    = 0x03;
 export const REPLY_OK         = 0x00;
 export const REPLY_CMD_UNSUP  = 0x07;

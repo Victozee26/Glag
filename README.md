@@ -3,12 +3,16 @@
 Routes Free Fire's UDP traffic through a SOCKS5 proxy that holds all packets
 for a configurable window, then dumps them all at once (burst release).
 
+**Now with TCP passthrough:** TCP connections are tunneled in real-time without queueing.
+
 ```
 Free Fire App
      ↓
 SocksDroid (intercepts all traffic, no root)
      ↓
-This proxy on 127.0.0.1:1080  ← BURST HAPPENS HERE
+This proxy on 127.0.0.1:1080
+     ├─→ TCP: real-time passthrough (no burst)
+     └─→ UDP: BURST HAPPENS HERE
      ↓
 Free Fire Game Servers
 ```
@@ -37,12 +41,22 @@ npm start -- --port 1080 --hold 2000
 
 ---
 
+## Features
+
+### UDP Burst (Original)
+Every `--hold` ms, all queued UDP packets are released simultaneously.
+
+### TCP Passthrough (New)
+TCP connections tunnel through in real-time with no queueing or delay.
+
+---
+
 ## CLI Flags
 
 | Flag     | Default | Description                                    |
 |----------|---------|------------------------------------------------|
 | `--port` | `1080`  | SOCKS5 TCP port SocksDroid connects to         |
-| `--hold` | `2000`  | How long (ms) to hold packets before burst     |
+| `--hold` | `2000`  | How long (ms) to hold UDP packets before burst |
 
 ### Examples
 
@@ -59,6 +73,28 @@ npm start -- --port 1234 --hold 2000
 
 ---
 
+## Protocol Details
+
+### UDP Burst Flow
+```
+1. UDP packets arrive → queued in memory
+2. Every --hold ms → all queued packets burst simultaneously
+3. Affects both inbound (server → client) and outbound (client → server)
+4. Result: rubber-banding, delayed hit registration, position jumps
+```
+
+### TCP Passthrough Flow
+```
+1. TCP CONNECT request received → tunnel created immediately
+2. Data flows bidirectionally with no queueing
+3. Real-time communication (no delay)
+4. Useful for control/signaling traffic
+```
+
+Both modes coexist: UDP uses burst logic, TCP bypasses it entirely.
+
+---
+
 ## SocksDroid Configuration
 
 1. Install **SocksDroid** from APK (not on Play Store)
@@ -72,26 +108,6 @@ npm start -- --port 1234 --hold 2000
 
 ---
 
-## What "Burst" Means
-
-Every `--hold` ms, ALL queued packets are dumped at once:
-
-```
-t=0ms   → Packet 1 arrives → queued
-t=300ms → Packet 2 arrives → queued
-t=900ms → Packet 3 arrives → queued
-t=2000ms → BURST: Packets 1,2,3 all released together
-t=2001ms → new window starts
-```
-
-This affects BOTH directions:
-- **Outgoing** (your actions → server): your inputs pile up, then slam the server
-- **Incoming** (server → you): game state updates pile up, then slam your screen
-
-Result: rubber-banding, delayed hit registration, sudden position jumps.
-
----
-
 ## Troubleshooting
 
 **Port already in use**
@@ -99,16 +115,6 @@ Result: rubber-banding, delayed hit registration, sudden position jumps.
 # Use a different port
 tsx src/index.ts --port 1081 --hold 2000
 ```
-
----
-
-## Project Structure
-
-- `src/index.ts`: Application entry point.
-- `src/server.ts`: TCP server and SOCKS5 handshake handler.
-- `src/queue.ts`: Packet queue management and burst timer logic.
-- `src/config.ts`: Command-line argument parsing.
-- `src/socks5/`: Protocol-specific constants and UDP header utilities.
 
 **SocksDroid not connecting**
 - Make sure the proxy is running BEFORE toggling SocksDroid on
@@ -119,3 +125,42 @@ tsx src/index.ts --port 1081 --hold 2000
 - SocksDroid must be ON and pointed at correct port
 - Start Free Fire after proxy is running
 - Some devices need SocksDroid to be granted VPN permission first
+
+---
+
+## Project Structure
+
+- `src/index.ts` — Application entry point
+- `src/server.ts` — TCP server and SOCKS5 handshake handler
+- `src/connection.ts` — Client connection handler (routes to TCP/UDP)
+- `src/queue.ts` — UDP packet queue management and burst timer logic
+- `src/config.ts` — Command-line argument parsing
+- `src/socks5/handler.ts` — SOCKS5 protocol negotiation (auth, commands)
+- `src/socks5/constants.ts` — SOCKS5 protocol constants
+- `src/relay/tcp-relay.ts` — TCP bidirectional tunneling (NEW)
+- `src/relay/udp-relay.ts` — UDP relay socket management
+
+---
+
+## Architecture
+
+### Dual-Mode Proxy
+
+The proxy detects the SOCKS5 command and routes accordingly:
+
+| Command | Mode | Behavior | Queueing |
+|---------|------|----------|----------|
+| `0x01` CONNECT | TCP | Bidirectional tunnel | None (real-time) |
+| `0x03` UDP_ASSOC | UDP | Relay with burst | Yes (hold + release) |
+
+### Connection Lifecycle
+
+**TCP Mode:**
+```
+Client connects → SOCKS5 CONNECT → Tunnel created → Real-time data flow
+```
+
+**UDP Mode:**
+```
+Client connects → SOCKS5 UDP_ASSOC → Queue created → Hold packets → Burst release
+```
