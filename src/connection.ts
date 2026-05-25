@@ -1,4 +1,5 @@
 import * as net from 'node:net';
+import * as dgram from 'node:dgram';
 import { SOCKS5Handler } from './socks5/handler.js';
 import { UDPRelay, RelayRouter } from './relay/udp-relay.js';
 import { PacketQueue } from './queue.js';
@@ -85,7 +86,7 @@ export class ClientConnection {
   /**
    * Handle UDP message from relay — route inbound/outbound
    */
-  private handleRelayMessage(msg: Buffer, rinfo: any): void {
+  private handleRelayMessage(msg: Buffer, rinfo: dgram.RemoteInfo): void {
     if (!this.relay) return;
 
     // Lock client address on first message
