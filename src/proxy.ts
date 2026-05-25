@@ -1,4 +1,4 @@
-#!/usr/bin/env ts-node
+#!/usr/bin/env tsx
 
 /**
  * UDP Burst Proxy — Free Fire Edition
@@ -10,11 +10,11 @@
  * then ALL dumped at once (burst). Both directions affected.
  *
  * Usage:
- *   npx ts-node src/proxy.ts --port 1080 --hold 2000
+ *   npm start -- --port 1080 --hold 2000
  */
 
-import * as net from 'net';
-import * as dgram from 'dgram';
+import * as net from 'node:net';
+import * as dgram from 'node:dgram';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Config
@@ -31,15 +31,16 @@ function parseArgs(): Config {
   let holdMs = 2000;
 
   for (let i = 0; i < raw.length; i++) {
-    if (raw[i] === '--port' && raw[i + 1]) {
-      port = parseInt(raw[i + 1], 10);
+    const val = raw[i + 1];
+    if (raw[i] === '--port' && val !== undefined) {
+      port = parseInt(val, 10);
       if (isNaN(port) || port < 1 || port > 65535) {
         console.error('[CONFIG] Invalid --port. Use 1–65535.');
         process.exit(1);
       }
     }
-    if (raw[i] === '--hold' && raw[i + 1]) {
-      holdMs = parseInt(raw[i + 1], 10);
+    if (raw[i] === '--hold' && val !== undefined) {
+      holdMs = parseInt(val, 10);
       if (isNaN(holdMs) || holdMs < 0) {
         console.error('[CONFIG] Invalid --hold. Use positive ms e.g. 2000');
         process.exit(1);
@@ -129,7 +130,7 @@ function parseUDPHeader(buf: Buffer): ParsedUDPHeader | null {
     }
     case ATYP_DOMAIN: {
       const len = buf[4];
-      if (buf.length < 5 + len + 2) return null;
+      if (len === undefined || buf.length < 5 + len + 2) return null;
       destAddr = buf.slice(5, 5 + len).toString('utf8');
       offset = 5 + len;
       break;
@@ -260,8 +261,8 @@ function handleClient(tcp: net.Socket): void {
         const cmd = buf[1];
 
         // We ONLY support UDP ASSOCIATE
-        if (cmd !== CMD_UDP_ASSOC) {
-          console.log(`[CMD] Unsupported command: 0x${cmd.toString(16)}`);
+        if (cmd === undefined || cmd !== CMD_UDP_ASSOC) {
+          console.log(`[CMD] Unsupported command: 0x${cmd?.toString(16)}`);
           tcp.write(Buffer.from([
             SOCKS5_VERSION, REPLY_CMD_UNSUP, 0x00,
             ATYP_IPV4, 0, 0, 0, 0, 0, 0

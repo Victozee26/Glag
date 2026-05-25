@@ -32,7 +32,7 @@ npm install
 
 ### 3. Run the proxy
 ```bash
-npx ts-node src/proxy.ts --port 1080 --hold 2000
+npm start -- --port 1080 --hold 2000
 ```
 
 ---
@@ -48,13 +48,13 @@ npx ts-node src/proxy.ts --port 1080 --hold 2000
 
 ```bash
 # Mild burst — 1 second hold
-npx ts-node src/proxy.ts --port 1080 --hold 1000
+npm start -- --hold 1000
 
 # Aggressive burst — 3 second hold (heavy packet dump)
-npx ts-node src/proxy.ts --port 1080 --hold 3000
+npm start -- --hold 3000
 
 # Different port
-npx ts-node src/proxy.ts --port 1234 --hold 2000
+npm start -- --port 1234 --hold 2000
 ```
 
 ---
