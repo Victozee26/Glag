@@ -16,6 +16,8 @@ export class ClientConnection {
   private clientUDPPort: number | null = null;
   private mode: 'tcp' | 'udp' | null = null;
 
+  private buffer: Buffer = Buffer.alloc(0);
+
   constructor(
     private tcp: net.Socket,
     private queue: PacketQueue,
@@ -28,36 +30,76 @@ export class ClientConnection {
    */
   public async handleData(buf: Buffer): Promise<void> {
     try {
-      const state = this.socks5.getState();
+      const currentState = this.socks5.getState();
 
-      if (state === 'auth') {
-        const authResp = this.socks5.handleAuth(buf);
-        if (!authResp) {
-          console.error(`[AUTH] Bad version: ${buf[0]}`);
-          this.tcp.destroy();
-          return;
+      if (currentState === 'associated') {
+        if (this.mode === 'tcp' && this.tcpRelay) {
+          this.tcpRelay.send(buf);
         }
-        this.tcp.write(this.socks5.buildAuthResponse());
         return;
       }
 
-      if (state === 'cmd') {
-        const cmdResp = this.socks5.handleCmd(buf);
-        if (!cmdResp || !cmdResp.success) {
-          const cmd = buf[1] ?? 0;
-          console.log(`[CMD] Unsupported command: 0x${cmd.toString(16)}`);
-          this.tcp.write(this.socks5.buildCmdRejection());
-          this.tcp.destroy();
-          return;
+      this.buffer = Buffer.concat([this.buffer, buf]);
+
+      while (this.buffer.length > 0) {
+        const state = this.socks5.getState();
+
+        if (state === 'auth') {
+          const auth = this.socks5.handleAuth(this.buffer);
+          if (!auth) break;
+
+          this.buffer = this.buffer.subarray(auth.consumed);
+          this.tcp.write(this.socks5.buildAuthResponse());
+          continue;
         }
 
-        // Route based on command type
-        if (cmdResp.type === 'tcp') {
-          await this.setupTCPRelay(cmdResp.destAddr!, cmdResp.destPort!);
-        } else if (cmdResp.type === 'udp') {
-          await this.setupUDPRelay();
+        if (state === 'cmd') {
+          const cmd = this.socks5.handleCmd(this.buffer);
+          if (!cmd) break;
+
+          this.buffer = this.buffer.subarray(cmd.consumed);
+
+          const cmdResp = cmd.resp;
+          if (!cmdResp || !cmdResp.success) {
+            this.tcp.write(this.socks5.buildCmdRejection());
+            this.tcp.destroy();
+            return;
+          }
+
+          if (cmdResp.type === 'tcp') {
+            // Self-loop protection
+            const localPort = this.tcp.localPort;
+            if (
+              (cmdResp.destAddr === '127.0.0.1' || cmdResp.destAddr === 'localhost') &&
+              cmdResp.destPort === localPort
+            ) {
+              console.warn(`[TCP] Loop detected! Blocking connection to self.`);
+              this.tcp.write(this.socks5.buildCmdRejection());
+              this.tcp.destroy();
+              return;
+            }
+            await this.setupTCPRelay(cmdResp.destAddr!, cmdResp.destPort!);
+          } else if (cmdResp.type === 'udp') {
+            await this.setupUDPRelay();
+          }
+
+          // If we have remaining data after association (unlikely for SOCKS5 but possible)
+          if (this.buffer.length > 0 && this.socks5.getState() === 'associated') {
+            if (this.mode === 'tcp' && this.tcpRelay) {
+              this.tcpRelay.send(this.buffer);
+              this.buffer = Buffer.alloc(0);
+            }
+          }
+          break;
         }
-        return;
+
+        if (state === 'associated') {
+          if (this.mode === 'tcp' && this.tcpRelay) {
+            this.tcpRelay.send(this.buffer);
+          }
+          this.buffer = Buffer.alloc(0);
+          break;
+        }
       }
     } catch (err) {
       console.error(`[HANDLER] Unhandled: ${(err as Error).message}`);
@@ -70,13 +112,19 @@ export class ClientConnection {
    */
   private async setupUDPRelay(): Promise<void> {
     this.udpRelay = new UDPRelay();
+    this.mode = 'udp';
 
     try {
       const relayPort = await this.udpRelay.bind();
-      const localIP = (this.tcp.localAddress ?? '127.0.0.1').replace(
+      let localIP = (this.tcp.localAddress ?? '127.0.0.1').replace(
         '::ffff:',
         '',
       );
+
+      // SOCKS5 response must be IPv4 for ATYP_IPV4
+      if (localIP === '::1' || localIP.includes(':')) {
+        localIP = '127.0.0.1';
+      }
 
       this.udpRelay.onMessage((msg, rinfo) => {
         this.handleRelayMessage(msg, rinfo);
@@ -105,10 +153,14 @@ export class ClientConnection {
     try {
       await this.tcpRelay.connect(destAddr, destPort);
 
-      const localIP = (this.tcp.localAddress ?? '127.0.0.1').replace(
+      let localIP = (this.tcp.localAddress ?? '127.0.0.1').replace(
         '::ffff:',
         '',
       );
+      if (localIP === '::1' || localIP.includes(':')) {
+        localIP = '127.0.0.1';
+      }
+
       const localPort = this.tcp.localPort ?? 0;
 
       this.tcp.write(this.socks5.buildTCPSuccess(localIP, localPort));

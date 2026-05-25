@@ -25,13 +25,6 @@ export class TCPRelay {
           const socket = this.serverSocket;
           if (!socket) return;
 
-          // Forward client → server
-          this.clientSocket.on('data', (data) => {
-            if (socket && !socket.destroyed) {
-              socket.write(data);
-            }
-          });
-
           // Forward server → client
           socket.on('data', (data) => {
             if (!this.clientSocket.destroyed) {
@@ -81,6 +74,15 @@ export class TCPRelay {
         clearTimeout(timeout);
       });
     });
+  }
+
+  /**
+   * Send data to destination server
+   */
+  public send(data: Buffer): void {
+    if (this.serverSocket && !this.serverSocket.destroyed && this.connected) {
+      this.serverSocket.write(data);
+    }
   }
 
   /**

@@ -35,67 +35,83 @@ export class SOCKS5Handler {
 
   /**
    * Process authentication request
+   * Returns { response, consumed }
    */
-  public handleAuth(buf: Buffer): AuthResponse | null {
-    if (buf[0] !== SOCKS5_VERSION) {
-      return null;
-    }
+  public handleAuth(buf: Buffer): { resp: AuthResponse; consumed: number } | null {
+    if (buf.length < 2) return null;
+    if (buf[0] !== SOCKS5_VERSION) return null;
+
+    const nMethods = buf[1];
+    if (buf.length < 2 + nMethods) return null;
+
     this.state = 'cmd';
-    return { version: SOCKS5_VERSION, method: AUTH_NONE };
+    return {
+      resp: { version: SOCKS5_VERSION, method: AUTH_NONE },
+      consumed: 2 + nMethods,
+    };
   }
 
   /**
    * Process command request (TCP CONNECT or UDP_ASSOC)
+   * Returns { response, consumed }
    */
-  public handleCmd(buf: Buffer): CmdResponse | null {
-    if (buf[0] !== SOCKS5_VERSION) {
-      return { success: false };
-    }
+  public handleCmd(buf: Buffer): { resp: CmdResponse; consumed: number } | null {
+    if (buf.length < 6) return null;
+    if (buf[0] !== SOCKS5_VERSION) return { resp: { success: false }, consumed: 1 };
 
     const cmd = buf[1];
+    let consumed = 0;
+    let cmdResp: CmdResponse | null = null;
 
     // TCP CONNECT
     if (cmd === CMD_CONNECT) {
       const parsed = this.parseTCPConnect(buf);
-      if (!parsed) return { success: false };
-      this.state = 'associated';
-      return { success: true, type: 'tcp', ...parsed };
+      if (!parsed) return null;
+      cmdResp = { success: true, type: 'tcp', ...parsed.data };
+      consumed = parsed.consumed;
     }
-
     // UDP ASSOCIATE
-    if (cmd === CMD_UDP_ASSOC) {
-      this.state = 'associated';
-      return { success: true, type: 'udp' };
+    else if (cmd === CMD_UDP_ASSOC) {
+      // UDP Assoc header is same as TCP Connect but addr/port are often 0
+      const parsed = this.parseTCPConnect(buf);
+      if (!parsed) return null;
+      cmdResp = { success: true, type: 'udp' };
+      consumed = parsed.consumed;
+    } else {
+      return { resp: { success: false }, consumed: 1 };
     }
 
-    return { success: false };
+    this.state = 'associated';
+    return { resp: cmdResp, consumed };
   }
 
   /**
-   * Parse SOCKS5 TCP CONNECT request
+   * Parse SOCKS5 address/port structure
    */
   private parseTCPConnect(
     buf: Buffer,
-  ): { destAddr: string; destPort: number } | null {
-    if (buf.length < 6) return null;
-
+  ): { data: { destAddr: string; destPort: number }; consumed: number } | null {
     const atyp = buf[3];
 
     if (atyp === ATYP_IPV4) {
-      // IPv4: format is [ver:1][cmd:1][rsv:1][atyp:1][addr:4][port:2]
       if (buf.length < 10) return null;
       const destAddr = `${buf[4]}.${buf[5]}.${buf[6]}.${buf[7]}`;
       const destPort = buf.readUInt16BE(8);
-      return { destAddr, destPort };
+      return { data: { destAddr, destPort }, consumed: 10 };
     }
 
     if (atyp === ATYP_DOMAIN) {
-      // Domain: [ver:1][cmd:1][rsv:1][atyp:1][len:1][domain:len][port:2]
       const len = buf[4];
       if (!len || buf.length < 5 + len + 2) return null;
       const destAddr = buf.toString('ascii', 5, 5 + len);
       const destPort = buf.readUInt16BE(5 + len);
-      return { destAddr, destPort };
+      return { data: { destAddr, destPort }, consumed: 7 + len };
+    }
+
+    if (atyp === ATYP_IPV6) {
+      if (buf.length < 22) return null;
+      // We don't fully support IPv6 relay yet, but we can parse it
+      return { data: { destAddr: 'ipv6-placeholder', destPort: 0 }, consumed: 22 };
     }
 
     return null;
