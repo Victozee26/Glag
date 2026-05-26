@@ -9,6 +9,7 @@ import { TCPRelay } from './relay/tcp-relay.js';
 import { RelayRouter } from './relay/udp-relay.js';
 import { PacketQueue } from './queue.js';
 import type { Config } from './config.js';
+import { BadVPNParser } from './badvpn-protocol.js';
 
 /**
  * SOCKS5 server using socks5server library — manages client connections
@@ -93,6 +94,17 @@ export class ProxyServer {
     const clientId = `${socket.remoteAddress}:${socket.remotePort}`;
     console.log(`\n[TCP] ↗ New connection: ${clientId} → ${address}:${port}`);
 
+    // Special case: CONNECT to 127.0.0.1:7300 → badvpn-udpgw protocol
+    if (address === '127.0.0.1' && port === 7300) {
+      console.log(`[TCP] ↪ CONNECT → 127.0.0.1:7300 — intercepting as badvpn-udpgw`);
+      CMD_REPLY(0, address, port);
+
+      // Enter badvpn mode: parse incoming data as badvpn packets
+      this.handleBadVPNConnection(socket);
+      return;
+    }
+
+    // Regular TCP relay for other destinations
     const relay = new TCPRelay(socket);
     relay
       .connect(address, port)
@@ -120,6 +132,81 @@ export class ProxyServer {
         CMD_REPLY(1);
         socket.destroy();
       });
+  }
+
+  /**
+   * Handle badvpn-udpgw protocol connection
+   * 
+   * Format (discovered by reverse-engineering SocksDroid):
+   * [4 bytes: header/framing] [1 byte: type] [addr] [2 bytes: port (BE)] [payload]
+   * 
+   * For IPv4 type (0x00):
+   * [4 bytes: header] [0x00] [4 bytes: IPv4] [2 bytes: port] [payload]
+   */
+  private handleBadVPNConnection(socket: net.Socket): void {
+    const clientId = `${socket.remoteAddress}:${socket.remotePort}`;
+    console.log(`[BadVPN] ✅ badvpn tunnel ready: ${clientId}`);
+
+    let buffer = Buffer.alloc(0);
+    const udpSocket = dgram.createSocket('udp4');
+    let packetCount = 0;
+
+    socket.on('data', (data: Buffer) => {
+      buffer = Buffer.concat([buffer, data]);
+
+      // Try to parse packets from buffer
+      while (buffer.length >= 12) { // Minimum: 4 (header) + 1 (type) + 4 (IPv4) + 2 (port)
+        const headerFrame = buffer[0];
+        const frameLen = buffer[1]; // Might be part of length
+        const typeOrLen = buffer[4];
+
+        // Check if this looks like a valid packet start
+        if (typeOrLen === 0x00) {
+          // Likely IPv4 format: header(4) + type(1) + IPv4(4) + port(2) + payload
+          if (buffer.length < 12) break;
+
+          const ipBytes = buffer.subarray(5, 9);
+          const destAddr = `${ipBytes[0]}.${ipBytes[1]}.${ipBytes[2]}.${ipBytes[3]}`;
+          const destPort = buffer.readUInt16BE(9);
+          const payloadStart = 11;
+          const payloadLen = buffer.length - payloadStart;
+
+          // For now, assume single packet per frame (could implement length-prefixed)
+          const payload = buffer.subarray(payloadStart);
+
+          packetCount++;
+          console.log(
+            `[BadVPN] 📦 Packet #${packetCount}: ${destAddr}:${destPort} (${payloadLen} bytes) → queued for burst`,
+          );
+
+          // Queue the UDP packet with burst delay
+          this.queue.push({
+            dir: 'out',
+            payload,
+            destAddr,
+            destPort,
+            relay: udpSocket,
+          });
+
+          // Consume this packet from buffer
+          buffer = buffer.subarray(payloadStart + payloadLen);
+        } else {
+          // Unknown format, skip byte and try again
+          console.warn(`[BadVPN] Unknown packet type: 0x${(typeOrLen || 0).toString(16)}`);
+          buffer = buffer.subarray(1);
+        }
+      }
+    });
+
+    socket.on('close', () => {
+      console.log(`[BadVPN] ↙ Connection closed: ${clientId} (sent ${packetCount} packets)`);
+      udpSocket.close();
+    });
+
+    socket.on('error', (err) => {
+      console.error(`[BadVPN] ✗ Error: ${err.message}`);
+      udpSocket.close();
+    });
   }
 
   /**

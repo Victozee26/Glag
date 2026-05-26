@@ -3,16 +3,20 @@
 Routes Free Fire's UDP traffic through a SOCKS5 proxy that holds all packets
 for a configurable window, then dumps them all at once (burst release).
 
-**Now with TCP passthrough:** TCP connections are tunneled in real-time without queueing.
+**Features:** 
+- TCP passthrough (real-time, no queueing)
+- UDP burst delay (configurable hold window)
+- **NEW:** badvpn-udpgw protocol support for UDP packet forwarding
 
 ```
 Free Fire App
      ↓
-SocksDroid (intercepts all traffic, no root)
+SocksDroid (SOCKS5 on :1080)
+     ├─→ TCP: real-time passthrough
+     ├─→ UDP: burst-delayed relay
+     └─→ badvpn (:7300): packet extraction + forwarding
      ↓
 This proxy on 127.0.0.1:1080
-     ├─→ TCP: real-time passthrough (no burst)
-     └─→ UDP: BURST HAPPENS HERE
      ↓
 Free Fire Game Servers
 ```
@@ -43,11 +47,9 @@ npm start -- --port 1080 --hold 2000
 
 ## Features
 
-### UDP Burst (Original)
-Every `--hold` ms, all queued UDP packets are released simultaneously.
-
-### TCP Passthrough (New)
-TCP connections tunnel through in real-time with no queueing or delay.
+- **TCP Passthrough**: Real-time tunneling with no queueing
+- **UDP Burst**: Hold all packets for `--hold` ms, release simultaneously
+- **badvpn-udpgw Protocol**: Intercepts SocksDroid UDP forwarding on `:7300`, extracts destination IP:port from each packet, routes to correct game servers with burst delay
 
 ---
 
@@ -75,23 +77,20 @@ npm start -- --port 1234 --hold 2000
 
 ## Protocol Details
 
-### UDP Burst Flow
-```
-1. UDP packets arrive → queued in memory
-2. Every --hold ms → all queued packets burst simultaneously
-3. Affects both inbound (server → client) and outbound (client → server)
-4. Result: rubber-banding, delayed hit registration, position jumps
-```
+### Packet Flow
 
-### TCP Passthrough Flow
-```
-1. TCP CONNECT request received → tunnel created immediately
-2. Data flows bidirectionally with no queueing
-3. Real-time communication (no delay)
-4. Useful for control/signaling traffic
-```
+**TCP**: SOCKS5 CONNECT → Bidirectional tunnel → Real-time forwarding
 
-Both modes coexist: UDP uses burst logic, TCP bypasses it entirely.
+**UDP**: SOCKS5 UDP_ASSOC → Queue creation → Hold packets → Burst release (all at once)
+
+**badvpn**: SocksDroid sends `CONNECT → 127.0.0.1:7300` → Proxy intercepts → Parses packet frame to extract destination IP:port → Queues with burst delay → Routes to game server
+
+### Packet Frame Format (badvpn)
+```
+[4 bytes: header] [1 byte: type] [4 bytes: IPv4] [2 bytes: port (BE)] [payload]
+Example: eb04028e 00 8efb9d77 01bb c700...
+         (header)  (type) (142.251.157.119) (443)
+```
 
 ---
 
@@ -130,37 +129,23 @@ tsx src/index.ts --port 1081 --hold 2000
 
 ## Project Structure
 
-- `src/index.ts` — Application entry point
-- `src/server.ts` — TCP server and SOCKS5 handshake handler
-- `src/connection.ts` — Client connection handler (routes to TCP/UDP)
-- `src/queue.ts` — UDP packet queue management and burst timer logic
-- `src/config.ts` — Command-line argument parsing
-- `src/socks5/handler.ts` — SOCKS5 protocol negotiation (auth, commands)
-- `src/socks5/constants.ts` — SOCKS5 protocol constants
-- `src/relay/tcp-relay.ts` — TCP bidirectional tunneling (NEW)
-- `src/relay/udp-relay.ts` — UDP relay socket management
+- `src/server.ts` — SOCKS5 server, TCP relay, badvpn handler
+- `src/connection.ts` — Client connection state machine
+- `src/queue.ts` — UDP burst queue and timer
+- `src/relay/tcp-relay.ts` — TCP tunnel manager
+- `src/relay/udp-relay.ts` — UDP relay socket handler
+- `src/badvpn-protocol.ts` — badvpn protocol parser
+- `src/config.ts` — CLI args
+- `src/socks5/` — SOCKS5 protocol (auth, commands)
 
 ---
 
 ## Architecture
 
-### Dual-Mode Proxy
+| Mode | Command | Handler | Behavior |
+|------|---------|---------|----------|
+| TCP | CONNECT (0x01) | `TCPRelay` | Real-time bidirectional tunnel |
+| UDP | UDP_ASSOC (0x03) | `PacketQueue` | Hold → Burst release |
+| badvpn | CONNECT → 127.0.0.1:7300 | `handleBadVPNConnection()` | Parse dest IP:port → Queue → Burst |
 
-The proxy detects the SOCKS5 command and routes accordingly:
-
-| Command | Mode | Behavior | Queueing |
-|---------|------|----------|----------|
-| `0x01` CONNECT | TCP | Bidirectional tunnel | None (real-time) |
-| `0x03` UDP_ASSOC | UDP | Relay with burst | Yes (hold + release) |
-
-### Connection Lifecycle
-
-**TCP Mode:**
-```
-Client connects → SOCKS5 CONNECT → Tunnel created → Real-time data flow
-```
-
-**UDP Mode:**
-```
-Client connects → SOCKS5 UDP_ASSOC → Queue created → Hold packets → Burst release
-```
+All three modes work simultaneously. SocksDroid detects which one to use based on the app's traffic patterns.

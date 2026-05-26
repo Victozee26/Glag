@@ -4,6 +4,7 @@ import { SOCKS5Handler } from './socks5/handler.js';
 import { UDPRelay, RelayRouter } from './relay/udp-relay.js';
 import { TCPRelay } from './relay/tcp-relay.js';
 import { PacketQueue } from './queue.js';
+import { BadVPNParser } from './badvpn-protocol.js';
 
 /**
  * TCP connection handler — manages lifecycle and state for one client
@@ -14,7 +15,8 @@ export class ClientConnection {
   private udpRelay: UDPRelay | null = null;
   private clientUDPAddr: string | null = null;
   private clientUDPPort: number | null = null;
-  private mode: 'tcp' | 'udp' | null = null;
+  private mode: 'tcp' | 'udp' | 'badvpn' | null = null;
+  private udpSocket: dgram.Socket | null = null;
 
   private buffer: Buffer = Buffer.alloc(0);
 
@@ -25,12 +27,22 @@ export class ClientConnection {
     this.socks5 = new SOCKS5Handler();
   }
 
+  private isBadvpnMode(): this is { mode: 'badvpn' } {
+    return this.mode === 'badvpn';
+  }
+
   /**
    * Handle incoming TCP data and manage protocol handshake
    */
   public async handleData(buf: Buffer): Promise<void> {
     try {
       const currentState = this.socks5.getState();
+
+      // If in badvpn mode, parse badvpn packets directly
+      if ((this.mode as any) === 'badvpn') {
+        this.handleBadVPNData(buf);
+        return;
+      }
 
       if (currentState === 'associated') {
         if (this.mode === 'tcp' && this.tcpRelay) {
@@ -85,8 +97,14 @@ export class ClientConnection {
 
           // If we have remaining data after association (unlikely for SOCKS5 but possible)
           if (this.buffer.length > 0 && this.socks5.getState() === 'associated') {
-            if (this.mode === 'tcp' && this.tcpRelay) {
-              this.tcpRelay.send(this.buffer);
+            if (this.mode === 'tcp') {
+              if (this.tcpRelay) {
+                this.tcpRelay.send(this.buffer);
+              }
+              this.buffer = Buffer.alloc(0);
+            } else if ((this.mode as any) === 'badvpn') {
+              // Switch to badvpn parsing
+              this.handleBadVPNData(this.buffer);
               this.buffer = Buffer.alloc(0);
             }
           }
@@ -94,8 +112,12 @@ export class ClientConnection {
         }
 
         if (state === 'associated') {
-          if (this.mode === 'tcp' && this.tcpRelay) {
-            this.tcpRelay.send(this.buffer);
+          if (this.mode === 'tcp') {
+            if (this.tcpRelay) {
+              this.tcpRelay.send(this.buffer);
+            }
+          } else if ((this.mode as any) === 'badvpn') {
+            this.handleBadVPNData(this.buffer);
           }
           this.buffer = Buffer.alloc(0);
           break;
@@ -104,6 +126,44 @@ export class ClientConnection {
     } catch (err) {
       console.error(`[HANDLER] Unhandled: ${(err as Error).message}`);
       this.tcp.destroy();
+    }
+  }
+
+  /**
+   * Handle badvpn protocol data
+   */
+  private handleBadVPNData(buf: Buffer): void {
+    this.buffer = Buffer.concat([this.buffer, buf]);
+
+    while (this.buffer.length > 0) {
+      const result = BadVPNParser.parse(this.buffer);
+      if (!result) break;
+
+      const { packet, consumed } = result;
+      this.buffer = this.buffer.subarray(consumed);
+
+      // Create UDP socket if needed
+      if (!this.udpSocket) {
+        this.udpSocket = dgram.createSocket('udp4');
+      }
+
+      console.log(
+        `[BadVPN] 📦 Packet: ${packet.addr}:${packet.port} (${packet.payload.length} bytes)`,
+      );
+
+      // Ensure UDP socket exists
+      if (!this.udpSocket) {
+        this.udpSocket = dgram.createSocket('udp4');
+      }
+
+      // Queue the UDP packet with burst delay
+      this.queue.push({
+        dir: 'out',
+        payload: packet.payload,
+        destAddr: packet.addr,
+        destPort: packet.port,
+        relay: this.udpSocket,
+      });
     }
   }
 
@@ -151,8 +211,39 @@ export class ClientConnection {
     destAddr: string,
     destPort: number,
   ): Promise<void> {
-    this.tcpRelay = new TCPRelay(this.tcp);
     this.mode = 'tcp';
+
+    // Special case: CONNECT to 127.0.0.1:7300 → badvpn-udpgw protocol
+    if (destAddr === '127.0.0.1' && destPort === 7300) {
+      console.log(`[TCP] ↪ CONNECT → 127.0.0.1:7300 — intercepting as badvpn-udpgw`);
+      this.mode = 'badvpn';
+      
+      let localIP = (this.tcp.localAddress ?? '127.0.0.1').replace(
+        '::ffff:',
+        '',
+      );
+      if (localIP === '::1' || localIP.includes(':')) {
+        localIP = '127.0.0.1';
+      }
+
+      const localPort = this.tcp.localPort ?? 0;
+
+      // Send SOCKS5 success response (pretend we connected to 127.0.0.1:7300)
+      this.tcp.write(this.socks5.buildTCPSuccess(localIP, localPort));
+
+      const clientId = `${this.tcp.remoteAddress}:${this.tcp.remotePort}`;
+      console.log(`[TCP] ✅ badvpn tunnel ready: ${clientId}`);
+
+      // Create UDP socket for badvpn
+      if (!this.udpSocket) {
+        this.udpSocket = dgram.createSocket('udp4');
+      }
+
+      return;
+    }
+
+    // Normal TCP relay for other destinations
+    this.tcpRelay = new TCPRelay(this.tcp);
 
     try {
       await this.tcpRelay.connect(destAddr, destPort);
@@ -258,8 +349,10 @@ export class ClientConnection {
     console.log(`[TCP] ↘ Client disconnected: ${clientId}`);
     this.tcpRelay?.close();
     this.udpRelay?.close();
+    this.udpSocket?.close();
     this.tcpRelay = null;
     this.udpRelay = null;
+    this.udpSocket = null;
   }
 
   /**
