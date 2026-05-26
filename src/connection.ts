@@ -111,6 +111,7 @@ export class ClientConnection {
    * Setup UDP relay socket and respond to client
    */
   private async setupUDPRelay(): Promise<void> {
+    console.log(`[UDP] ℹ Setting up UDP relay...`);
     this.udpRelay = new UDPRelay();
     this.mode = 'udp';
 
@@ -130,12 +131,15 @@ export class ClientConnection {
         this.handleRelayMessage(msg, rinfo);
       });
 
+      console.log(
+        `[UDP] 📡 Responding to client: bind on ${localIP}:${relayPort}`,
+      );
       this.tcp.write(this.socks5.buildCmdSuccess(relayPort, localIP));
 
       const clientId = `${this.tcp.remoteAddress}:${this.tcp.remotePort}`;
-      console.log(`[UDP] Relay ready on port ${relayPort} for ${clientId}`);
+      console.log(`[UDP] ✓ Relay ready on port ${relayPort} for ${clientId}`);
     } catch (err) {
-      console.error(`[RELAY] Bind failed: ${(err as Error).message}`);
+      console.error(`[UDP] ✗ Bind failed: ${(err as Error).message}`);
       this.tcp.destroy();
     }
   }
@@ -181,24 +185,40 @@ export class ClientConnection {
   private handleRelayMessage(msg: Buffer, rinfo: dgram.RemoteInfo): void {
     if (!this.udpRelay) return;
 
+    const normalizedAddr = rinfo.address.replace('::ffff:', '');
+    console.log(
+      `[UDP] 📦 Packet received: ${normalizedAddr}:${rinfo.port} (${msg.length} bytes)`,
+    );
+
     // Lock client address on first message
     if (this.clientUDPAddr === null) {
-      this.clientUDPAddr = rinfo.address;
+      this.clientUDPAddr = normalizedAddr;
       this.clientUDPPort = rinfo.port;
       console.log(
-        `[UDP] Client UDP locked: ${this.clientUDPAddr}:${this.clientUDPPort}`,
+        `[UDP] ✓ Client UDP locked: ${this.clientUDPAddr}:${this.clientUDPPort}`,
       );
     }
 
-    const isFromClient = rinfo.address === this.clientUDPAddr;
+    const isFromClient =
+      normalizedAddr === this.clientUDPAddr && rinfo.port === this.clientUDPPort;
 
     if (isFromClient) {
+      console.log(`[UDP] ↗ Outbound from client (${msg.length} bytes)`);
       const routed = RelayRouter.routeOutbound(msg);
-      if (!routed) return;
+      if (!routed) {
+        console.warn(`[UDP] ✗ Failed to parse outbound packet from client`);
+        return;
+      }
 
       const { destAddr, destPort } = routed;
-      if (!destAddr || destPort === undefined) return;
+      if (!destAddr || destPort === undefined) {
+        console.warn(`[UDP] ✗ Missing destAddr or destPort`);
+        return;
+      }
 
+      console.log(
+        `[UDP] → Queueing outbound: ${destAddr}:${destPort} (payload: ${routed.payload.length} bytes)`,
+      );
       this.queue.push({
         dir: 'out',
         payload: routed.payload,
@@ -207,10 +227,19 @@ export class ClientConnection {
         relay: this.udpRelay.getSocket(),
       });
     } else {
-      if (!this.clientUDPAddr || !this.clientUDPPort) return;
+      console.log(
+        `[UDP] ↙ Inbound from upstream: ${normalizedAddr}:${rinfo.port}`,
+      );
+      if (!this.clientUDPAddr || !this.clientUDPPort) {
+        console.warn(`[UDP] ✗ Client address not locked yet`);
+        return;
+      }
 
       const routed = RelayRouter.routeInbound(msg, rinfo);
 
+      console.log(
+        `[UDP] ← Queueing inbound: to client (payload: ${routed.payload.length} bytes)`,
+      );
       this.queue.push({
         dir: 'in',
         payload: routed.payload,

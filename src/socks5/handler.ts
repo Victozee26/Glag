@@ -7,6 +7,7 @@ import {
   REPLY_CMD_UNSUP,
   ATYP_IPV4,
   ATYP_DOMAIN,
+  ATYP_IPV6,
 } from './constants.js';
 
 export type ProtocolState = 'auth' | 'cmd' | 'associated';
@@ -41,7 +42,7 @@ export class SOCKS5Handler {
     if (buf.length < 2) return null;
     if (buf[0] !== SOCKS5_VERSION) return null;
 
-    const nMethods = buf[1];
+    const nMethods = buf[1]!;
     if (buf.length < 2 + nMethods) return null;
 
     this.state = 'cmd';
@@ -59,12 +60,15 @@ export class SOCKS5Handler {
     if (buf.length < 6) return null;
     if (buf[0] !== SOCKS5_VERSION) return { resp: { success: false }, consumed: 1 };
 
-    const cmd = buf[1];
+    const cmd = buf[1]!;
     let consumed = 0;
     let cmdResp: CmdResponse | null = null;
 
+    console.log(`[SOCKS5] Command received: 0x${cmd.toString(16).padStart(2, '0')}`);
+
     // TCP CONNECT
     if (cmd === CMD_CONNECT) {
+      console.log(`[SOCKS5] → TCP CONNECT command`);
       const parsed = this.parseTCPConnect(buf);
       if (!parsed) return null;
       cmdResp = { success: true, type: 'tcp', ...parsed.data };
@@ -72,12 +76,14 @@ export class SOCKS5Handler {
     }
     // UDP ASSOCIATE
     else if (cmd === CMD_UDP_ASSOC) {
+      console.log(`[SOCKS5] → UDP ASSOCIATE command`);
       // UDP Assoc header is same as TCP Connect but addr/port are often 0
       const parsed = this.parseTCPConnect(buf);
       if (!parsed) return null;
       cmdResp = { success: true, type: 'udp' };
       consumed = parsed.consumed;
     } else {
+      console.log(`[SOCKS5] ✗ Unknown command: 0x${cmd.toString(16).padStart(2, '0')}`);
       return { resp: { success: false }, consumed: 1 };
     }
 
@@ -110,8 +116,13 @@ export class SOCKS5Handler {
 
     if (atyp === ATYP_IPV6) {
       if (buf.length < 22) return null;
-      // We don't fully support IPv6 relay yet, but we can parse it
-      return { data: { destAddr: 'ipv6-placeholder', destPort: 0 }, consumed: 22 };
+      const parts: string[] = [];
+      for (let i = 0; i < 8; i++) {
+        parts.push(buf.readUInt16BE(4 + i * 2).toString(16));
+      }
+      const destAddr = parts.join(':');
+      const destPort = buf.readUInt16BE(20);
+      return { data: { destAddr, destPort }, consumed: 22 };
     }
 
     return null;

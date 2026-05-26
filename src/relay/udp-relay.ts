@@ -30,13 +30,19 @@ export class UDPRelay {
       });
 
       this.socket.on('message', (msg: Buffer, rinfo: dgram.RemoteInfo) => {
+        console.log(
+          `[RELAY] Message event triggered: ${msg.length} bytes from ${rinfo.address}:${rinfo.port}`,
+        );
         if (this.messageHandler) {
           this.messageHandler(msg, rinfo);
         }
       });
 
-      this.socket.bind(0, '0.0.0.0', () => {
+      this.socket.bind(0, '127.0.0.1', () => {
         const port = (this.socket.address() as AddressInfo).port;
+        console.log(
+          `[RELAY] UDP socket bound to 127.0.0.1:${port}`,
+        );
         resolve(port);
       });
     });

@@ -10,6 +10,9 @@
     "test": "vitest run",
     "run:example": "tsx src/index.ts --port 1080 --hold 2000"
   },
+  "dependencies": {
+    "socks5server": "^4.5.4"
+  },
   "devDependencies": {
     "@types/node": "^20.19.41",
     "tsx": "^4.22.3",

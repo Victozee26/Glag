@@ -6,7 +6,7 @@ export interface Config {
 export function parseArgs(): Config {
   const raw = process.argv.slice(2);
   let port = 1080;
-  let holdMs = 2000;
+  let holdMs = 10;
 
   for (let i = 0; i < raw.length; i++) {
     const val = raw[i + 1];

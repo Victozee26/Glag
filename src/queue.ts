@@ -28,11 +28,27 @@ export class PacketQueue {
   constructor(private holdMs: number) {}
 
   public push(pkt: QueuedPkt): void {
+    if (this.holdMs <= 0) {
+      this.releasePacket(pkt);
+      return;
+    }
     this.queue.push(pkt);
   }
 
+  private releasePacket(pkt: QueuedPkt): void {
+    if (pkt.dir === 'out') {
+      pkt.relay.send(pkt.payload, pkt.destPort, pkt.destAddr, (err) => {
+        if (err) console.error(`\n[OUT] Send failed: ${err.message}`);
+      });
+    } else {
+      pkt.relay.send(pkt.payload, pkt.clientPort, pkt.clientAddr, (err) => {
+        if (err) console.error(`\n[IN] Send failed: ${err.message}`);
+      });
+    }
+  }
+
   public startBurstTimer(): void {
-    if (this.timer) return;
+    if (this.holdMs <= 0 || this.timer) return;
     this.timer = setInterval(() => {
       if (this.queue.length === 0) return;
 
@@ -41,23 +57,15 @@ export class PacketQueue {
       this.totalPackets += batch.length;
 
       const outCount = batch.filter((p) => p.dir === 'out').length;
-      const inCount  = batch.filter((p) => p.dir === 'in').length;
+      const inCount = batch.filter((p) => p.dir === 'in').length;
 
       process.stdout.write(
         `\r[BURST #${this.totalBursts}] 💥 Released ${batch.length} pkts ` +
-        `(↑${outCount} out / ↓${inCount} in) | Total: ${this.totalPackets}   `
+          `(↑${outCount} out / ↓${inCount} in) | Total: ${this.totalPackets}   `,
       );
 
       for (const pkt of batch) {
-        if (pkt.dir === 'out') {
-          pkt.relay.send(pkt.payload, pkt.destPort, pkt.destAddr, (err) => {
-            if (err) console.error(`\n[OUT] Send failed: ${err.message}`);
-          });
-        } else {
-          pkt.relay.send(pkt.payload, pkt.clientPort, pkt.clientAddr, (err) => {
-            if (err) console.error(`\n[IN] Send failed: ${err.message}`);
-          });
-        }
+        this.releasePacket(pkt);
       }
     }, this.holdMs);
   }

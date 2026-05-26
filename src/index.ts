@@ -18,7 +18,6 @@ console.log('  SocksDroid → 127.0.0.1:' + config.port);
 console.log('');
 
 const queue = new PacketQueue(config.holdMs);
-queue.startBurstTimer();
 
 const server = new ProxyServer(config, queue);
 server.listen().catch((err) => {
